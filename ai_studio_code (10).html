@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Whistler Blackcomb Live Ski Map</title>
+
+    <!-- Leaflet CSS for Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --primary: #007aff;
+            --bg-glass: rgba(255, 255, 255, 0.95);
+            --text-dark: #1c1c1e;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        
+        body, html {
+            height: 100%;
+            width: 100%;
+            overflow: hidden; 
+            background: #f0f0f0;
+        }
+
+        #map { height: 100vh; width: 100vw; z-index: 1; }
+
+        /* Modern Floating Location Button */
+        #locate-btn {
+            position: absolute;
+            bottom: 90px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: white;
+            border: none;
+            border-radius: 50%;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            font-size: 22px;
+            cursor: pointer;
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        #locate-btn:active { transform: scale(0.9); }
+        #locate-btn.tracking { background: var(--primary); color: white; }
+
+        /* Bottom Sheet for Lifts */
+        #lift-panel {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 65vh;
+            background: var(--bg-glass);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border-radius: 24px 24px 0 0;
+            box-shadow: 0 -5px 25px rgba(0,0,0,0.15);
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            transform: translateY(calc(100% - 70px)); 
+            transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+        }
+
+        #lift-panel.open { transform: translateY(0); }
+
+        .panel-header {
+            height: 70px;
+            padding: 15px 20px;
+            cursor: pointer;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .drag-indicator {
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 5px;
+            background: #c7c7cc;
+            border-radius: 3px;
+        }
+
+        .panel-title { font-size: 1.1rem; font-weight: 700; color: var(--text-dark); }
+        .panel-subtitle { font-size: 0.85rem; color: #8e8e93; font-weight: 600; }
+
+        .lift-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 20px 20px;
+            list-style: none;
+        }
+
+        .lift-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+
+        .lift-name { font-weight: 600; color: #333; font-size: 0.95rem; }
+        
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .status-open { background: #34c759; color: white; }
+        .status-closed { background: #ff3b30; color: white; }
+        .status-hold { background: #ffcc00; color: #333; }
+        .status-scheduled { background: #5856d6; color: white; }
+
+        /* Live Pulsing User Location Marker */
+        .user-marker {
+            width: 18px;
+            height: 18px;
+            background-color: var(--primary);
+            border: 3px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(0, 122, 255, 0.6);
+            position: relative;
+        }
+        .user-marker::after {
+            content: '';
+            position: absolute;
+            top: -14px;
+            left: -14px;
+            width: 40px;
+            height: 40px;
+            background-color: rgba(0, 122, 255, 0.3);
+            border-radius: 50%;
+            animation: pulse 2s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.1); opacity: 1; }
+            100% { transform: scale(1.2); opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+
+    <button id="locate-btn" title="Center on my location">🎯</button>
+
+    <div id="lift-panel">
+        <div class="panel-header" id="toggle-panel">
+            <div class="drag-indicator"></div>
+            <div class="panel-title">🚠 Whistler Lifts</div>
+            <div class="panel-subtitle" id="lift-status-text">Fetching API...</div>
+        </div>
+        <ul class="lift-list" id="lift-list"></ul>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // ==========================================
+        // 1. MAP & SKI RUNS INITIALIZATION
+        // ==========================================
+        const map = L.map('map', { zoomControl: false }).setView([50.065, -122.95], 13);
+
+        // High Resolution Base Map
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© OSM'
+        }).addTo(map);
+
+        // Waymarked Trails - Overlays Ski Runs and Lifts
+        L.tileLayer('https://tile.waymarkedtrails.org/slopes/{z}/{x}/{y}.png', {
+            maxZoom: 18,
+            attribution: '© Waymarked Trails',
+            opacity: 1.0
+        }).addTo(map);
+
+        // ==========================================
+        // 2. LIVE LOCATION TRACKING & SIMULATOR
+        // ==========================================
+        let userMarker = null;
+        let watchId = null;
+        let isSimulating = false;
+        const locateBtn = document.getElementById('locate-btn');
+
+        const userIcon = L.divIcon({
+            html: '<div class="user-marker"></div>',
+            className: '',
+            iconSize:[18, 18],
+            iconAnchor: [9, 9]
+        });
+
+        function updateUserLocation(lat, lng) {
+            if (!userMarker) {
+                userMarker = L.marker([lat, lng], { icon: userIcon }).addTo(map);
+                map.setView([lat, lng], 15); 
+            } else {
+                userMarker.setLatLng([lat, lng]);
+                map.panTo([lat, lng]); // Keep camera centered on moving dot
+            }
+        }
+
+        // GPS Simulator: Moves the dot down the mountain if real GPS fails
+        function startSimulation() {
+            if(isSimulating) return;
+            isSimulating = true;
+            locateBtn.classList.add('tracking');
+            alert("Real GPS is blocked (requires HTTPS). Starting 'Ski Simulator' instead to demonstrate tracking down the mountain!");
+            
+            // Route from top of Roundhouse Lodge down to the Village
+            let currentLat = 50.0610; 
+            let currentLng = -122.9460;
+            
+            // Animate moving downhill
+            setInterval(() => {
+                if(currentLat < 50.1160) {
+                    currentLat += 0.00015; // move North
+                    currentLng -= 0.00003; // move West
+                    updateUserLocation(currentLat, currentLng);
+                }
+            }, 100); 
+        }
+
+        function startTracking() {
+            // Check if testing locally on a computer file
+            if (window.location.protocol === 'file:') {
+                startSimulation();
+                return;
+            }
+
+            if (!navigator.geolocation) {
+                alert("Geolocation not supported. Starting simulator.");
+                startSimulation();
+                return;
+            }
+
+            locateBtn.classList.add('tracking');
+
+            watchId = navigator.geolocation.watchPosition(
+                (pos) => updateUserLocation(pos.coords.latitude, pos.coords.longitude),
+                (err) => {
+                    console.error(err);
+                    startSimulation(); // Fallback if user denied location
+                },
+                { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+            );
+        }
+
+        locateBtn.addEventListener('click', () => {
+            if (!userMarker && !watchId && !isSimulating) startTracking();
+            else if (userMarker) map.setView(userMarker.getLatLng(), 15);
+        });
+
+        // ==========================================
+        // 3. FIXED LIFTIE API FETCH
+        // ==========================================
+        async function fetchLifts() {
+            const statusText = document.getElementById('lift-status-text');
+            const listEl = document.getElementById('lift-list');
+            
+            const resortId = 'whistler-blackcomb';
+            const targetApiUrl = `https://liftie.info/api/resort/${resortId}`;
+            
+            // Proxies needed to bypass Cross-Origin limits on web browsers
+            const proxyFallbacks =[
+                (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+                (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+            ];
+
+            let liftsData = null;
+
+            for (let proxyUrlMaker of proxyFallbacks) {
+                try {
+                    const res = await fetch(proxyUrlMaker(targetApiUrl));
+                    if (res.ok) {
+                        const data = await res.json();
+                        // FIXED: Reached directly into data.lifts.status to prevent [object Object]
+                        if (data && data.lifts && data.lifts.status) {
+                            liftsData = data.lifts.status; 
+                            break; 
+                        }
+                    }
+                } catch (e) {
+                    console.warn("Proxy attempt failed, falling back...");
+                }
+            }
+
+            if (liftsData) {
+                renderLifts(liftsData);
+                statusText.innerText = `${Object.keys(liftsData).length} Lifts Found`;
+            } else {
+                statusText.innerText = "API Blocked";
+                listEl.innerHTML = '<li style="padding:20px;text-align:center;color:#ff3b30;">Could not connect to Liftie API.</li>';
+            }
+        }
+
+        function renderLifts(lifts) {
+            const listEl = document.getElementById('lift-list');
+            listEl.innerHTML = ''; 
+
+            // Convert raw Liftie status object into a sorted array
+            const liftArray = Object.keys(lifts).map(name => {
+                return { name: name, status: lifts[name] };
+            });
+            
+            liftArray.sort((a,b) => a.name.localeCompare(b.name));
+
+            liftArray.forEach(lift => {
+                const li = document.createElement('li');
+                li.className = 'lift-item';
+                
+                let statusClass = 'status-closed';
+                let statusText = String(lift.status).toLowerCase();
+                
+                if (statusText.includes('open')) statusClass = 'status-open';
+                else if (statusText.includes('hold')) statusClass = 'status-hold';
+                else if (statusText.includes('scheduled')) statusClass = 'status-scheduled';
+                
+                li.innerHTML = `
+                    <span class="lift-name">${lift.name}</span>
+                    <span class="status-badge ${statusClass}">${lift.status}</span>
+                `;
+                listEl.appendChild(li);
+            });
+        }
+
+        // ==========================================
+        // 4. BOTTOM SHEET UI LOGIC
+        // ==========================================
+        const panel = document.getElementById('lift-panel');
+        document.getElementById('toggle-panel').addEventListener('click', () => {
+            panel.classList.toggle('open');
+        });
+
+        // Load lifts on startup
+        fetchLifts();
+        setInterval(fetchLifts, 60000); // Refresh API every 1 minute
+
+    </script>
+</body>
+</html>
